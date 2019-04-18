@@ -17,8 +17,10 @@
 package com.netflix.spinnaker.gate.services
 
 import com.netflix.spinnaker.gate.config.InsightConfiguration
+import com.netflix.spinnaker.gate.security.RequestContext
 import com.netflix.spinnaker.gate.services.commands.HystrixFactory
 import com.netflix.spinnaker.gate.services.internal.ClouddriverServiceSelector
+import com.netflix.spinnaker.gate.services.internal.OrcaServiceSelector
 import groovy.transform.CompileStatic
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
@@ -33,15 +35,19 @@ class JobService {
   ClouddriverServiceSelector clouddriverServiceSelector
 
   @Autowired
+  OrcaServiceSelector orcaServiceSelector
+
+
+  @Autowired
   InsightConfiguration insightConfiguration
 
   @Autowired
   ProviderLookupService providerLookupService
 
-  List getForApplication(String applicationName, String expand, String selectorKey) {
-    String commandKey = Boolean.valueOf(expand) ? "getExpandedJobsForApplication" : "getJobsForApplication"
-    HystrixFactory.newListCommand(GROUP, commandKey) {
-      clouddriverServiceSelector.select(selectorKey).getJobs(applicationName, expand)
+  List getPreconfiguredJobs() {
+    RequestContext requestContext = RequestContext.get()
+    HystrixFactory.newListCommand(GROUP, "getPreconfiguredJobs") {
+        orcaServiceSelector.withContext(requestContext).getPreconfiguredJobs()
     } execute()
   }
 
@@ -49,7 +55,7 @@ class JobService {
     HystrixFactory.newMapCommand(GROUP, "getJobsForApplicationAccountAndRegion-${providerLookupService.providerForAccount(account)}", {
       try {
         def context = getContext(applicationName, account, region, name)
-        return clouddriverServiceSelector.select(selectorKey).getJobDetails(applicationName, account, region, name) + [
+        return clouddriverServiceSelector.select(selectorKey).getJobDetails(applicationName, account, region, name, "") + [
             "insightActions": insightConfiguration.job.collect { it.applyContext(context) }
         ]
       } catch (RetrofitError e) {

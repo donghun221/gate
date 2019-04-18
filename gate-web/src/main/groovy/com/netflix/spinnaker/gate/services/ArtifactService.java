@@ -19,12 +19,17 @@ package com.netflix.spinnaker.gate.services;
 import com.netflix.hystrix.HystrixCommand;
 import com.netflix.spinnaker.gate.services.commands.HystrixFactory;
 import com.netflix.spinnaker.gate.services.internal.ClouddriverServiceSelector;
+import com.netflix.spinnaker.gate.services.internal.IgorService;
 import groovy.transform.CompileStatic;
+import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import retrofit.client.Response;
 
+import java.io.OutputStream;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 
 @CompileStatic
@@ -32,16 +37,61 @@ import java.util.concurrent.Callable;
 public class ArtifactService {
   private static final String GROUP = "artifacts";
 
-  @Autowired
   private ClouddriverServiceSelector clouddriverServiceSelector;
+  private Optional<IgorService> igorService;
 
-  private static HystrixCommand<List<Map>> listCommand(String type, Callable<List<Map>> work) {
+
+  @Autowired
+  public ArtifactService(ClouddriverServiceSelector clouddriverServiceSelector, Optional<IgorService> igorService) {
+    this.clouddriverServiceSelector = clouddriverServiceSelector;
+    this.igorService = igorService;
+  }
+
+  private static HystrixCommand<List<Map>> mapListCommand(String type, Callable<List<Map>> work) {
     return HystrixFactory.newListCommand(GROUP, type, work);
   }
 
+  private static HystrixCommand<List<String>> stringListCommand(String type, Callable<List<String>> work) {
+    return HystrixFactory.newListCommand(GROUP, type, work);
+  }
+
+  private static HystrixCommand<Void> voidCommand(String type, Callable<Void> work) {
+    return HystrixFactory.newVoidCommand(GROUP, type, work);
+  }
+
   public List<Map> getArtifactCredentials(String selectorKey) {
-    return listCommand("artifactCredentials",
-        clouddriverServiceSelector.select(selectorKey)::getArtifactCredentials)
-        .execute();
+    return mapListCommand("artifactCredentials",
+      clouddriverServiceSelector.select(selectorKey)::getArtifactCredentials)
+      .execute();
+  }
+
+  public List<String> getArtifactNames(String selectorKey, String accountName, String type) {
+    return stringListCommand("artifactNames",
+      () -> clouddriverServiceSelector.select(selectorKey).getArtifactNames(accountName, type))
+      .execute();
+  }
+
+  public List<String> getArtifactVersions(String selectorKey, String accountName, String type, String artifactName) {
+    return stringListCommand("artifactVersions",
+      () -> clouddriverServiceSelector.select(selectorKey).getArtifactVersions(accountName, type, artifactName))
+      .execute();
+  }
+
+  public Void getArtifactContents(String selectorKey, Map<String, String> artifact, OutputStream outputStream) {
+    return voidCommand("artifactContents", () -> {
+      Response contentResponse = clouddriverServiceSelector.select(selectorKey).getArtifactContent(artifact);
+      IOUtils.copy(contentResponse.getBody().in(), outputStream);
+      return null;
+    }).execute();
+  }
+
+  public List<String> getVersionsOfArtifactForProvider(String provider, String packageName) {
+    if (!igorService.isPresent()) {
+      throw new IllegalStateException("Cannot fetch artifact versions because Igor is not enabled.");
+    }
+
+    return stringListCommand("artifactVersionsByProvider",
+      () -> igorService.get().getArtifactVersions(provider, packageName))
+      .execute();
   }
 }

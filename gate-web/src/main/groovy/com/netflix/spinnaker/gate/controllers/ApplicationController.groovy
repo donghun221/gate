@@ -26,6 +26,8 @@ import io.swagger.annotations.ApiParam
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.core.env.Environment
 import org.springframework.http.HttpEntity
+import org.springframework.security.access.prepost.PostFilter
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
@@ -60,6 +62,8 @@ class ApplicationController {
 
   @ApiOperation(value = "Retrieve a list of applications", response = List.class)
   @RequestMapping(method = RequestMethod.GET)
+  @PreAuthorize("@fiatPermissionEvaluator.storeWholePermission()")
+  @PostFilter("hasPermission(filterObject.get('name'), 'APPLICATION', 'READ')")
   List<HashMap<String, Object>> getAllApplications(
     @ApiParam(name = "account", required = false, value = "filters results to only include applications deployed in the specified account")
     @RequestParam(value = "account", required = false) String account,
@@ -94,7 +98,7 @@ class ApplicationController {
     result
   }
 
-  @ApiOperation(value = "Retrieve a list of an application's configuration revision history", response = HashMap.class, responseContainer = "List")
+  @ApiOperation(value = "Retrieve a list of an application's configuration revision history", response = List.class)
   @RequestMapping(value = "/{application}/history", method = RequestMethod.GET)
   List<Map> getApplicationHistory(@PathVariable("application") String application,
                                   @RequestParam(value = "limit", defaultValue = "20") int limit) {

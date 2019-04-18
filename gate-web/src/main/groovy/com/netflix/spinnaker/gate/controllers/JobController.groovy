@@ -29,14 +29,6 @@ class JobController {
   @Autowired
   JobService jobService
 
-  @ApiOperation(value = "Get jobs", response = List.class)
-  @RequestMapping(value = "/applications/{applicationName}/jobs", method = RequestMethod.GET)
-  List getJobs(@PathVariable String applicationName,
-               @RequestParam(required = false, value = 'expand', defaultValue = 'false') String expand,
-               @RequestHeader(value = "X-RateLimit-App", required = false) String sourceApp) {
-    jobService.getForApplication(applicationName, expand, sourceApp)
-  }
-
   @ApiOperation(value = "Get job", response = HashMap.class)
   @RequestMapping(value = "/applications/{applicationName}/jobs/{account}/{region}/{name}", method = RequestMethod.GET)
   Map getJob(@PathVariable String applicationName, @PathVariable String account,
@@ -46,4 +38,11 @@ class JobController {
              @RequestHeader(value = "X-RateLimit-App", required = false) String sourceApp) {
     jobService.getForApplicationAndAccountAndRegion(applicationName, account, region, name, sourceApp)
   }
+
+  @ApiOperation(value = "Retrieve a list of preconfigured jobs in Orca")
+  @RequestMapping(value = "/jobs/preconfigured", method = RequestMethod.GET)
+  List preconfiguredWebhooks() {
+    jobService.getPreconfiguredJobs()
+  }
+
 }

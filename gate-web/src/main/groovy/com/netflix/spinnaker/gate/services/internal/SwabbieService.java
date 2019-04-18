@@ -16,11 +16,9 @@
 
 package com.netflix.spinnaker.gate.services.internal;
 
-import retrofit.http.Body;
-import retrofit.http.Headers;
-import retrofit.http.PUT;
-import retrofit.http.Path;
+import retrofit.http.*;
 
+import java.util.List;
 import java.util.Map;
 
 public interface SwabbieService {
@@ -29,4 +27,23 @@ public interface SwabbieService {
   Map optOut(@Path("namespace") String namespace,
              @Path("resourceId") String resourceId,
              @Body String ignored);
+
+  @Headers("Accept: application/json")
+  @PUT("/resources/state/{namespace}/{resourceId}/restore")
+  void restore(@Path("namespace") String namespace,
+               @Path("resourceId") String resourceId,
+               @Body String ignored);
+
+  @Headers("Accept: application/json")
+  @GET("/resources/marked/{namespace}/{resourceId}")
+  Map get(@Path("namespace") String namespace,
+          @Path("resourceId") String resourceId);
+
+  @Headers("Accept: application/json")
+  @GET("/resources/marked")
+  List getMarkedList(@Query("list") Boolean list);
+
+  @Headers("Accept: application/json")
+  @GET("/resources/deleted")
+  List getDeletedList();
 }

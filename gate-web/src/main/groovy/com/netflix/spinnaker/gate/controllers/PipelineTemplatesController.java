@@ -19,9 +19,17 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.netflix.spinnaker.gate.services.PipelineTemplateService;
+import com.netflix.spinnaker.gate.services.PipelineTemplateService.PipelineTemplateDependent;
 import com.netflix.spinnaker.gate.services.TaskService;
 import com.netflix.spinnaker.security.AuthenticatedRequest;
 import io.swagger.annotations.ApiOperation;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,14 +39,6 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping(value = "/pipelineTemplates")
@@ -52,18 +52,21 @@ public class PipelineTemplatesController {
   private ObjectMapper objectMapper;
 
   @Autowired
-  public PipelineTemplatesController(PipelineTemplateService pipelineTemplateService, TaskService taskService, ObjectMapper objectMapper) {
+  public PipelineTemplatesController(PipelineTemplateService pipelineTemplateService,
+                                     TaskService taskService,
+                                     ObjectMapper objectMapper) {
     this.pipelineTemplateService = pipelineTemplateService;
     this.taskService = taskService;
     this.objectMapper = objectMapper;
   }
 
-  @ApiOperation(value = "Returns a list of pipeline templates by scope")
+  @ApiOperation(value = "List pipeline templates.", response = List.class)
   @RequestMapping(method = RequestMethod.GET)
   public Collection<Map> list(@RequestParam(required = false) List<String> scopes) {
     return pipelineTemplateService.findByScope(scopes);
   }
 
+  @ApiOperation(value = "Create a pipeline template.", response = HashMap.class)
   @RequestMapping(method = RequestMethod.POST)
   @ResponseStatus(value = HttpStatus.ACCEPTED)
   public Map create(@RequestBody Map<String, Object> pipelineTemplate) {
@@ -77,7 +80,7 @@ public class PipelineTemplatesController {
     List<Map<String, Object>> jobs = new ArrayList<>();
     Map<String, Object> job = new HashMap<>();
     job.put("type", "createPipelineTemplate");
-    job.put("pipelineTemplate", encodeAsBase64(pipelineTemplate));
+    job.put("pipelineTemplate", encodeAsBase64(pipelineTemplate, objectMapper));
     job.put("user", AuthenticatedRequest.getSpinnakerUser().orElse("anonymous"));
     jobs.add(job);
 
@@ -89,16 +92,19 @@ public class PipelineTemplatesController {
     return taskService.create(operation);
   }
 
+  @ApiOperation(value = "Resolve a pipeline template.", response = HashMap.class)
   @RequestMapping(value = "/resolve", method = RequestMethod.GET)
   public Map resolveTemplates(@RequestParam String source, @RequestParam(required = false) String executionId, @RequestParam(required = false) String pipelineConfigId) {
     return pipelineTemplateService.resolve(source, executionId, pipelineConfigId);
   }
 
+  @ApiOperation(value = "Get a pipeline template.", response = HashMap.class)
   @RequestMapping(value = "/{id}", method = RequestMethod.GET)
   public Map get(@PathVariable String id) {
     return pipelineTemplateService.get(id);
   }
 
+  @ApiOperation(value = "Update a pipeline template.", response = HashMap.class)
   @RequestMapping(value = "/{id}", method = RequestMethod.POST)
   @ResponseStatus(value = HttpStatus.ACCEPTED)
   public Map update(@PathVariable String id,
@@ -115,7 +121,7 @@ public class PipelineTemplatesController {
     Map<String, Object> job = new HashMap<>();
     job.put("type", "updatePipelineTemplate");
     job.put("id", id);
-    job.put("pipelineTemplate", encodeAsBase64(pipelineTemplate));
+    job.put("pipelineTemplate", encodeAsBase64(pipelineTemplate, objectMapper));
     job.put("user", AuthenticatedRequest.getSpinnakerUser().orElse("anonymous"));
     job.put("skipPlanDependents", skipPlanDependents);
     jobs.add(job);
@@ -128,6 +134,7 @@ public class PipelineTemplatesController {
     return taskService.create(operation);
   }
 
+  @ApiOperation(value = "Delete a pipeline template.", response = HashMap.class)
   @RequestMapping(value = "/{id}", method = RequestMethod.DELETE)
   @ResponseStatus(value = HttpStatus.ACCEPTED)
   public Map delete(@PathVariable String id,
@@ -147,16 +154,25 @@ public class PipelineTemplatesController {
     return taskService.create(operation);
   }
 
-  private String getNameFromTemplate(PipelineTemplate template) {
+  @ApiOperation(value = "List all pipelines that implement a pipeline template", response = List.class)
+  @RequestMapping(value = "/{id}/dependents", method = RequestMethod.GET)
+  public List<PipelineTemplateDependent> listPipelineTemplateDependents(
+    @PathVariable String id,
+    @RequestParam(value = "recursive", required = false) boolean recursive
+  ) {
+    return pipelineTemplateService.getTemplateDependents(id, recursive);
+  }
+
+  static String getNameFromTemplate(PipelineTemplate template) {
     return Optional.ofNullable(template.metadata.name).orElse(template.id);
   }
 
-  private String getApplicationFromTemplate(PipelineTemplate template) {
+  static String getApplicationFromTemplate(PipelineTemplate template) {
     List<String> scopes = template.metadata.scopes;
     return (scopes.isEmpty() || scopes.size() > 1) ? DEFAULT_APPLICATION : scopes.get(0);
   }
 
-  private String encodeAsBase64(Object value) {
+  static String encodeAsBase64(Object value, ObjectMapper objectMapper) {
     try {
       return Base64.getEncoder().encodeToString(objectMapper.writeValueAsString(value).getBytes());
     } catch (Exception e) {

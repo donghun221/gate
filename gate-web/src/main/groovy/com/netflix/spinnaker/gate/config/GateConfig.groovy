@@ -20,11 +20,13 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.hystrix.strategy.concurrency.HystrixRequestContext
 import com.netflix.spectator.api.Registry
+import com.netflix.spinnaker.config.OkHttpClientConfiguration
 import com.netflix.spinnaker.fiat.shared.FiatClientConfigurationProperties
 import com.netflix.spinnaker.fiat.shared.FiatPermissionEvaluator
 import com.netflix.spinnaker.fiat.shared.FiatService
 import com.netflix.spinnaker.fiat.shared.FiatStatus
 import com.netflix.spinnaker.filters.AuthenticatedRequestFilter
+import com.netflix.spinnaker.gate.config.PostConnectionConfiguringJedisConnectionFactory.ConnectionPostProcessor
 import com.netflix.spinnaker.gate.filters.CorsFilter
 import com.netflix.spinnaker.gate.filters.GateOriginValidator
 import com.netflix.spinnaker.gate.filters.OriginValidator
@@ -46,6 +48,8 @@ import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.kork.web.selector.DefaultServiceSelector
 import com.netflix.spinnaker.kork.web.selector.SelectableService
 import com.netflix.spinnaker.kork.web.selector.ServiceSelector
+import com.netflix.spinnaker.okhttp.OkHttpClientConfigurationProperties
+import com.netflix.spinnaker.okhttp.OkHttpMetricsInterceptor
 import com.squareup.okhttp.OkHttpClient
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
@@ -58,8 +62,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.Primary
 import org.springframework.core.Ordered
-import org.springframework.data.redis.connection.jedis.JedisConnectionFactory
 import org.springframework.security.web.context.AbstractSecurityWebApplicationInitializer
 import org.springframework.session.data.redis.config.ConfigureRedisAction
 import org.springframework.session.data.redis.config.annotation.web.http.RedisHttpSessionConfiguration
@@ -100,20 +104,10 @@ class GateConfig extends RedisHttpSessionConfiguration {
   @Autowired
   RequestInterceptor spinnakerRequestInterceptor
 
-  @Bean
-  JedisConnectionFactory jedisConnectionFactory(
-    @Value('${redis.connection:redis://localhost:6379}') String connection
-  ) {
-    URI redis = URI.create(connection)
-    def factory = new JedisConnectionFactory()
-    factory.hostName = redis.host
-    factory.port = redis.port
-    if (redis.userInfo) {
-      factory.password = redis.userInfo.split(":", 2)[1]
-    }
-    factory
-  }
-
+  /**
+   * This pool is used for the rate limit storage, as opposed to the JedisConnectionFactory, which
+   * is a separate pool used for Spring Boot's session management.
+   */
   @Bean
   JedisPool jedis(@Value('${redis.connection:redis://localhost:6379}') String connection,
                   @Value('${redis.timeout:2000}') int timeout) {
@@ -126,9 +120,21 @@ class GateConfig extends RedisHttpSessionConfiguration {
     new RestTemplate()
   }
 
+  /**
+   * Always disable the ConfigureRedisAction that Spring Boot uses internally. Instead we use one
+   * qualified with @ConnectionPostProcessor. See
+   * {@link PostConnectionConfiguringJedisConnectionFactory}.
+   * */
   @Bean
+  @Primary
+  ConfigureRedisAction springBootConfigureRedisAction() {
+    return ConfigureRedisAction.NO_OP
+  }
+
+  @Bean
+  @ConnectionPostProcessor
   @ConditionalOnProperty("redis.configuration.secure")
-  ConfigureRedisAction configureRedisAction() {
+  ConfigureRedisAction connectionPostProcessorConfigureRedisAction() {
     return ConfigureRedisAction.NO_OP
   }
 
@@ -209,8 +215,20 @@ class GateConfig extends RedisHttpSessionConfiguration {
 
   @Bean
   @ConditionalOnProperty('services.kayenta.enabled')
-  KayentaService kayentaService(OkHttpClient okHttpClient) {
-    createClient "kayenta", KayentaService, okHttpClient
+  KayentaService kayentaService(OkHttpClient defaultClient,
+                                OkHttpClientConfigurationProperties props,
+                                OkHttpMetricsInterceptor interceptor,
+                                @Value('${services.kayenta.externalhttps:false}') boolean kayentaExternalHttps)
+  {
+    if (kayentaExternalHttps) {
+      def noSslCustomizationProps = props.clone()
+      noSslCustomizationProps.keyStore = null
+      noSslCustomizationProps.trustStore = null
+      def okHttpClient = new OkHttpClientConfiguration(noSslCustomizationProps, interceptor).create()
+      createClient "kayenta", KayentaService, okHttpClient
+    } else {
+      createClient "kayenta", KayentaService, defaultClient
+    }
   }
 
   @Bean

@@ -26,21 +26,16 @@ import groovy.transform.CompileDynamic
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Component
-import org.springframework.web.bind.annotation.ExceptionHandler
 import retrofit.RetrofitError
 import retrofit.converter.ConversionException
-import rx.Observable
-import rx.Scheduler
-import rx.schedulers.Schedulers
 
-import javax.annotation.PostConstruct
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 @CompileStatic
@@ -48,8 +43,6 @@ import java.util.concurrent.atomic.AtomicReference
 @Slf4j
 class ApplicationService {
   private static final String GROUP = "applications"
-
-  private Scheduler scheduler = Schedulers.io()
 
   @Autowired
   ServiceConfiguration serviceConfiguration
@@ -65,20 +58,15 @@ class ApplicationService {
 
   private AtomicReference<List<Map>> allApplicationsCache = new AtomicReference<>([])
 
-  @PostConstruct
-  void startMonitoring() {
-    Observable
-      .timer(60, TimeUnit.SECONDS, scheduler)
-      .repeat()
-      .subscribe({ Long interval ->
-      try {
-        log.debug("Refreshing Application List")
-        allApplicationsCache.set(tick(true))
-        log.debug("Refreshed Application List")
-      } catch (e) {
-        log.error("Unable to refresh application list, reason: ${e.message}")
-      }
-    })
+  @Scheduled(fixedDelayString = '${services.front50.applicationRefreshIntervalMs:5000}')
+  void refreshApplicationsCache() {
+    try {
+      log.debug("Refreshing Application List")
+      allApplicationsCache.set(tick(true))
+      log.debug("Refreshed Application List (applications: {})", allApplicationsCache.get().size())
+    } catch (e) {
+      log.error("Unable to refresh application list, reason: ${e.message}")
+    }
   }
 
   /**
@@ -88,8 +76,7 @@ class ApplicationService {
    * As a trade-off, we'll fetch cluster details on the background refresh loop and merge in the
    * account details when applications are requested on-demand.
    *
-   * @param expandClusterNames Should cluster details (for each application) be fetched from
-   * clouddriver
+   * @param expandClusterNames Should cluster details (for each application) be fetched from clouddriver
    * @return Applications
    */
   List<Map<String, Object>> tick(boolean expandClusterNames = true) {
@@ -108,17 +95,6 @@ class ApplicationService {
   }
 
   List<Map> getAllApplications() {
-    try {
-      def applicationsByName = allApplicationsCache.get().groupBy { it.name }
-      return tick(false).collect { Map application ->
-        applicationsByName[application.name.toString()]?.each { Map cacheApplication ->
-          application.accounts = mergeAccounts(application.accounts as String, cacheApplication.accounts as String)
-        }
-        application
-      } as List<Map>
-    } catch (e) {
-      log.error("Unable to fetch all applications, returning most recently cached version", e)
-    }
     return allApplicationsCache.get()
   }
 
@@ -184,66 +160,60 @@ class ApplicationService {
 
   @CompileDynamic
   private static List<Map> mergeApps(List<Map<String, Object>> applications, Service applicationServiceConfig) {
-
-    try {
-      Map<String, Map<String, Object>> merged = [:]
-      for (Map<String, Object> app in applications) {
-        if (!app?.name) {
-          continue
-        }
-
-        String key = (app.name as String)?.toLowerCase()
-        if (key && !merged.containsKey(key)) {
-          merged[key] = [name: key, attributes: [:], clusters: [:]] as Map<String, Object>
-        }
-
-        Map mergedApp = (Map) merged[key]
-        if (app.containsKey("clusters") || app.containsKey("clusterNames")) {
-          // Clouddriver
-          if (app.clusters) {
-            (mergedApp.clusters as Map).putAll(app.clusters as Map)
-          }
-          String accounts = (app.clusters as Map)?.keySet()?.join(',') ?:
-            (app.clusterNames as Map)?.keySet()?.join(',')
-
-          mergedApp.attributes.accounts = accounts
-
-          (app["attributes"] as Map).entrySet().each {
-            if (it.value && !(mergedApp.attributes as Map)[it.key]) {
-              // don't overwrite existing attributes with metadata from clouddriver
-              (mergedApp.attributes as Map)[it.key] = it.value
-            }
-          }
-        } else {
-          Map attributes = app.attributes ?: app
-          attributes.entrySet().each {
-            if (it.value != null) {
-              (mergedApp.attributes as Map)[it.key] = it.value
-            }
-          }
-        }
-
-        // ensure that names are consistently lower-cased.
-        mergedApp.name = key.toLowerCase()
-        mergedApp.attributes['name'] = mergedApp.name
+    Map<String, Map<String, Object>> merged = [:]
+    for (Map<String, Object> app in applications) {
+      if (!app?.name) {
+        continue
       }
 
-      Set<String> applicationFilter = applicationServiceConfig.config?.includedAccounts?.split(',')?.toList()?.findResults {
-        it.trim() ?: null
-      } ?: null
-      return merged.values().toList().findAll { Map<String, Object> account ->
-        if (applicationFilter == null) {
-          return true
-        }
-        String[] accounts = account?.attributes?.accounts?.split(',')
-        if (accounts == null) {
-          return true
-        }
-        return accounts.any { applicationFilter.contains(it) }
+      String key = (app.name as String)?.toLowerCase()
+      if (key && !merged.containsKey(key)) {
+        merged[key] = [name: key, attributes: [:], clusters: [:]] as Map<String, Object>
       }
-    } catch (Throwable t) {
-      t.printStackTrace()
-      throw t
+
+      Map mergedApp = (Map) merged[key]
+      if (app.containsKey("clusters") || app.containsKey("clusterNames")) {
+        // Clouddriver
+        if (app.clusters) {
+          (mergedApp.clusters as Map).putAll(app.clusters as Map)
+        }
+        String accounts = (app.clusters as Map)?.keySet()?.join(',') ?:
+          (app.clusterNames as Map)?.keySet()?.join(',')
+
+        mergedApp.attributes.accounts = accounts
+
+        (app["attributes"] as Map).entrySet().each {
+          if (it.value && !(mergedApp.attributes as Map)[it.key]) {
+            // don't overwrite existing attributes with metadata from clouddriver
+            (mergedApp.attributes as Map)[it.key] = it.value
+          }
+        }
+      } else {
+        Map attributes = app.attributes ?: app
+        attributes.entrySet().each {
+          if (it.value != null) {
+            (mergedApp.attributes as Map)[it.key] = it.value
+          }
+        }
+      }
+
+      // ensure that names are consistently lower-cased.
+      mergedApp.name = key.toLowerCase()
+      mergedApp.attributes['name'] = mergedApp.name
+    }
+
+    Set<String> applicationFilter = applicationServiceConfig.config?.includedAccounts?.split(',')?.toList()?.findResults {
+      it.trim() ?: null
+    } ?: null
+    return merged.values().toList().findAll { Map<String, Object> account ->
+      if (applicationFilter == null) {
+        return true
+      }
+      String[] accounts = account?.attributes?.accounts?.split(',')
+      if (accounts == null) {
+        return true
+      }
+      return accounts.any { applicationFilter.contains(it) }
     }
   }
 
@@ -269,7 +239,7 @@ class ApplicationService {
       HystrixFactory.newListCommand(GROUP, "getApplicationsFromFront50", {
         AuthenticatedRequest.propagate({
           try {
-            return front50.getAllApplications()
+            return front50.getAllApplicationsUnrestricted()
           } catch (RetrofitError e) {
             if (e.response?.status == 404) {
               return []
@@ -342,7 +312,7 @@ class ApplicationService {
       HystrixFactory.newListCommand(GROUP, "getApplicationsFromCloudDriver", {
         AuthenticatedRequest.propagate({
           try {
-            clouddriver.getApplications(expandClusterNames)
+            clouddriver.getAllApplicationsUnrestricted(expandClusterNames)
           } catch (RetrofitError e) {
             if (e.response?.status == 404) {
               return []

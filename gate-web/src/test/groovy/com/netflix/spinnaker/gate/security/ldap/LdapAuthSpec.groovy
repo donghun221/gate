@@ -23,8 +23,10 @@ import com.netflix.spinnaker.gate.security.GateSystemTest
 import com.netflix.spinnaker.gate.security.YamlFileApplicationContextInitializer
 import com.netflix.spinnaker.gate.services.AccountLookupService
 import com.netflix.spinnaker.gate.services.internal.ClouddriverService.AccountDetails
+import com.netflix.spinnaker.gate.services.internal.IgorService
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.mock.mockito.MockBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import org.springframework.mock.web.MockHttpSession
@@ -36,8 +38,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders
 import org.springframework.web.context.WebApplicationContext
 import spock.lang.Specification
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
-import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*
+import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.*
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*
 
 @Slf4j
@@ -51,6 +53,9 @@ class LdapAuthSpec extends Specification {
 
   @Autowired
   WebApplicationContext wac
+
+  @MockBean
+  private IgorService igorService
 
   MockMvc mockMvc
 

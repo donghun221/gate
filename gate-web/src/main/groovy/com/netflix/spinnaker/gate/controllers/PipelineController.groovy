@@ -20,10 +20,9 @@ package com.netflix.spinnaker.gate.controllers
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spinnaker.gate.security.RequestContext
 import com.netflix.spinnaker.gate.services.PipelineService
-
-import com.netflix.spinnaker.kork.web.exceptions.HasAdditionalAttributes
 import com.netflix.spinnaker.gate.services.TaskService
 import com.netflix.spinnaker.gate.services.internal.Front50Service
+import com.netflix.spinnaker.kork.web.exceptions.HasAdditionalAttributes
 import com.netflix.spinnaker.kork.web.exceptions.NotFoundException
 import com.netflix.spinnaker.security.AuthenticatedRequest
 import groovy.transform.CompileDynamic
@@ -36,13 +35,8 @@ import org.springframework.http.HttpEntity
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
-import org.springframework.web.bind.annotation.PathVariable
-import org.springframework.web.bind.annotation.RequestBody
-import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestMethod
-import org.springframework.web.bind.annotation.RequestParam
-import org.springframework.web.bind.annotation.ResponseStatus
-import org.springframework.web.bind.annotation.RestController
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
 import retrofit.RetrofitError
 
 import static net.logstash.logback.argument.StructuredArguments.value
@@ -143,7 +137,7 @@ class PipelineController {
     return front50Service.getPipelineConfigsForApplication((String) pipeline.get("application"), true)?.find { id == (String) it.get("id") }
   }
 
-  @ApiOperation(value = "Retrieve pipeline execution logs", response = HashMap.class, responseContainer = "List")
+  @ApiOperation(value = "Retrieve pipeline execution logs", response = List.class)
   @RequestMapping(value = "{id}/logs", method = RequestMethod.GET)
   List<Map> getPipelineLogs(@PathVariable("id") String id) {
     try {
@@ -155,23 +149,23 @@ class PipelineController {
     }
   }
 
-  @ApiOperation(value = "Cancel a pipeline execution", response = HashMap.class)
+  @ApiOperation(value = "Cancel a pipeline execution")
   @RequestMapping(value = "{id}/cancel", method = RequestMethod.PUT)
-  Map cancelPipeline(@PathVariable("id") String id,
+  void cancelPipeline(@PathVariable("id") String id,
                      @RequestParam(required = false) String reason,
                      @RequestParam(defaultValue = "false") boolean force) {
     pipelineService.cancelPipeline(id, reason, force)
   }
 
-  @ApiOperation(value = "Pause a pipeline execution", response = HashMap.class)
+  @ApiOperation(value = "Pause a pipeline execution")
   @RequestMapping(value = "{id}/pause", method = RequestMethod.PUT)
-  Map pausePipeline(@PathVariable("id") String id) {
+  void pausePipeline(@PathVariable("id") String id) {
     pipelineService.pausePipeline(id)
   }
 
   @ApiOperation(value = "Resume a pipeline execution", response = HashMap.class)
   @RequestMapping(value = "{id}/resume", method = RequestMethod.PUT)
-  Map resumePipeline(@PathVariable("id") String id) {
+  void resumePipeline(@PathVariable("id") String id) {
     pipelineService.resumePipeline(id)
   }
 
@@ -224,6 +218,24 @@ class PipelineController {
       log.error("Unable to trigger pipeline (application: {}, pipelineId: {})",
         value("application", application), value("pipelineId", pipelineNameOrId), e)
       new ResponseEntity([message: e.message], new HttpHeaders(), HttpStatus.UNPROCESSABLE_ENTITY)
+    }
+  }
+
+  @ApiOperation(value = "Trigger a pipeline execution")
+  @PreAuthorize("hasPermission(#application, 'APPLICATION', 'READ')")
+  @RequestMapping(value = "/v2/{application}/{pipelineNameOrId:.+}", method = RequestMethod.POST)
+  HttpEntity invokePipelineConfigViaEcho(@PathVariable("application") String application,
+                                         @PathVariable("pipelineNameOrId") String pipelineNameOrId,
+                                         @RequestBody(required = false) Map trigger) {
+    trigger = trigger ?: [:]
+    RequestContext.setApplication(application)
+    try {
+      def body = pipelineService.triggerViaEcho(application, pipelineNameOrId, trigger)
+      return new ResponseEntity(body, HttpStatus.ACCEPTED)
+    } catch (e) {
+      log.error("Unable to trigger pipeline (application: {}, pipelineId: {})",
+        value("application", application), value("pipelineId", pipelineNameOrId), e)
+      throw e
     }
   }
 
